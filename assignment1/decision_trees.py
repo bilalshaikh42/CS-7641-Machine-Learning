@@ -5,8 +5,10 @@ from sklearn import datasets
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils import compute_sample_weight
-from load_data import PenDigitsDataset, SpamBaseDataset
-from sklearn import grid_search, tree
+from plots import  plotConfusionMatrix, plotPerformance, makeAndPlotLearningCurve, plotValidationCurve
+from load_data import DefaultDataset, PenDigitsDataset, SpamBaseDataset
+from sklearn import  tree
+from sklearn.model_selection import GridSearchCV as grid_search
 import numpy as np
 import matplotlib.pyplot as plt
 import sklearn.model_selection as ms
@@ -42,7 +44,7 @@ class DecisionTree(object):
             random_state=random_state,
             max_leaf_nodes=max_leaf_nodes,
             min_impurity_decrease=min_impurity_decrease,
-            min_impurity_split=min_impurity_split,
+            
             class_weight=class_weight
         )
 
@@ -74,27 +76,16 @@ def complexity(pipe, dataset):
 
         print(score_train)
         print(score_test)
-
-    plt.plot(max_depth, score_test, 'o-',  label='Test Accuracy')
-    plt.plot(max_depth, score_train, 'o-',  label='Training Accuracy')
-
-    plt.ylabel('Model Performance')
-    plt.xlabel('Max Tree Depth')
-
-    plt.title("Performance of Decision Tree based on complexity")
-    plt.legend(loc='best')
-    plt.tight_layout()
-    print(score_test)
-    print(score_train)
-    plt.savefig("decisionTree/depthCurve.png")
-
+    plotPerformance(max_depth, score_test, score_train, "Max Depth", "Accuracy",
+                    "decisionTree", dataset.name, f'maxDepth', "Model Performance vs Complexity (depth)")
 
 
 def leavesComplexity(pipe, dataset):
 
     with Pool() as p:
-        depths=[10,20,30,40]
-        p.starmap(leavesDepthComplexity, [(pipe, dataset, depth) for depth in depths])
+        depths = [10, 20, 30, 40]
+        p.starmap(leavesDepthComplexity, [
+                  (pipe, dataset, depth) for depth in depths])
 
 
 def leavesDepthComplexity(pipe, dataset, depth):
@@ -118,29 +109,23 @@ def leavesDepthComplexity(pipe, dataset, depth):
             dataset.ytrain, y_train_pred, average='weighted'))
         prec_test.append(precision_score(
             dataset.ytest, y_test_pred, average='weighted'))
-    plt.clf()
-    plt.plot(max_leaves, score_test, 'o-',  label='Test Accuracy')
-    plt.plot(max_leaves, score_train, 'o-',  label='Training Accuracy')
 
-    plt.ylabel('Model Performance')
-    plt.xlabel('Max Leaves Count')
+    plotPerformance(max_leaves, score_test, score_train, "Max Leaf Nodes", "Accuracy", "decisionTree",
+                    dataset.name, f'Depth-{depth}-Leaves-{max_leaves[-1]}', "Model Performance vs Complexity (leaf count)")
 
-    plt.title("Performance of Decision Tree based on complexity")
-    plt.legend(loc='best')
-    plt.tight_layout()
-    plt.savefig("decisionTree/{d}depthleavesCurve.png".format(d=depth))
-    params= {
+    params = {
         'dt__max_depth': depth,
         'dt__max_leaf_nodes': max_leaves[np.argmax(score_test)],
     }
     learningCurve(pipe, dataset, params, name="{d}depthleaves".format(d=depth))
+
 
 def criteria(pipe, dataset):
     score_train = []
     score_test = []
     prec_train = []
     prec_test = []
-
+    criterions = ["gini", "entropy"]
     for criteria in criterions:
         pipe.set_params(dt__criterion=criteria)
 
@@ -172,7 +157,10 @@ def criteria(pipe, dataset):
     ax.bar([0+width/2, 1+width/2], [score_train[1],
            score_test[1]], label="Entropy", width=width)
     plt.legend(loc='best')
-    fig.savefig("decisionTree/criteria.png")
+    plt.title(f'Model Performance for different splitting criteria ({dataset.name})')
+    plt.xlabel("Split Criteria")
+    plt.ylabel("Accuracy")
+    fig.savefig(f'decisionTree/{dataset.name}criteria.png')
 
 
 def scorerFunc(y_true, y_pred):
@@ -180,7 +168,6 @@ def scorerFunc(y_true, y_pred):
     return accuracy_score(y_true, y_pred, sample_weight=weights)
 
 # from https://scikit-learn.org/stable/auto_examples/tree/plot_unveil_tree_structure.html
-
 
 def exploreTree(clf):
     n_nodes = clf.tree_.node_count
@@ -215,24 +202,24 @@ def exploreTree(clf):
         "The binary tree structure has {n} nodes and has {l} leaves.".format(n=n_nodes, l=numLeaves))
 
 
-def learningCurve(pipe, dataset, params=None, name=None):
-
+def learningCurve(pipe, dataset, params=None, name="Base"):
+    train_sizes = np.linspace(0.1, 1, 40, endpoint=True)
+    makeAndPlotLearningCurve(pipe, "decisionTree",dataset.xtrain,dataset.ytrain,train_sizes, "accuracy", "Accuracy", "Decision Tree", dataset.name, "DefaultBase")
     max_depths = np.arange(1, 51, 1)
     max_leaf_nodes = np.arange(2, 10, 1)
     if params is None:
         params = {'dt__criterion': ['gini', 'entropy'], 'dt__max_depth': max_depths,
-                'dt__class_weight': ['balanced', None]}  # 'dt__max_leaf_nodes': max_leaf_nodes}
+                  'dt__class_weight': ['balanced', None]}  # 'dt__max_leaf_nodes': max_leaf_nodes}
 
         scorer = make_scorer(scorerFunc)
 
         grid_search = ms.GridSearchCV(
-            pipe, n_jobs=8, param_grid=params, refit=True, verbose=10, cv=5, scoring=scorer,
-        )
+            pipe, n_jobs=8, param_grid=params, refit=True, verbose=10, cv=5, scoring=dataset.scorer)
+        
         grid_search.fit(dataset.xtrain, dataset.ytrain,)
         exploreTree(grid_search.best_estimator_.steps[1][1])
 
         best_estimator = grid_search.best_estimator_
-        best_estimator.set_params(dt__max_depth=10)
         best_estimator.fit(
             dataset.xtrain, dataset.ytrain)
     else:
@@ -240,51 +227,51 @@ def learningCurve(pipe, dataset, params=None, name=None):
         best_estimator.set_params(**params)
         best_estimator.fit(dataset.xtrain, dataset.ytrain)
 
-    train_sizes = np.append(np.linspace(0.05, 0.1, 20, endpoint=False),
-                            np.linspace(0.1, 1, 20, endpoint=True))
-    train_sizes = np.linspace(0.1, 1, 40, endpoint=True)
-    train_sizes, train_scores, test_scores = ms.learning_curve(
-        best_estimator,
-        dataset.xtrain, dataset.ytrain, cv=5, n_jobs=8,
-        verbose=10,
+  
+    best_params= best_estimator.get_params()
+    #makeAndPlotLearningCurve(best_estimator, "decisionTree",dataset.xtrain,dataset.ytrain,train_sizes, "accuracy", "Accuracy", "Decision Tree", dataset.name, "Base")
+    #makeAndPlotLearningCurve(best_estimator, "decisionTree",dataset.xtrain,dataset.ytrain,train_sizes, "balanced_accuracy", "Accuracy", "Decision Tree", dataset.name, "BaseBalanced")
+    #makeAndPlotLearningCurve(best_estimator, "decisionTree",dataset.xtrain,dataset.ytrain,train_sizes, "f1_micro", "F1 Score", "Decision Tree", dataset.name, "BaseF1")
+    #plotValidationCurve(best_estimator, "decisionTree",dataset.xtrain,dataset.ytrain, "dt__max_depth", np.arange(1, 51, 1), "accuracy",None, "Accuracy", "Decision Tree", dataset.name, "MaxDepth")
+    #plotValidationCurve(best_estimator, "decisionTree",dataset.xtrain,dataset.ytrain, "dt__max_depth", np.arange(1, 51, 1), "balanced_accuracy",None, "Accuracy", "Decision Tree", dataset.name, "MaxDepthBalanced")
+    #plotValidationCurve(best_estimator, "decisionTree",dataset.xtrain,dataset.ytrain, "dt__max_depth", np.arange(1, 51, 1), "f1_weighted",None, "F1 Score", "Decision Tree", dataset.name, "MaxDepthF1")
+    #plotValidationCurve(best_estimator, "decisionTree",dataset.xtrain,dataset.ytrain, "dt__max_leaf_nodes", np.arange(2, 500, 1), "accuracy",None, "Accuracy", "Decision Tree", dataset.name, "MaxLeaves")
+    #plotValidationCurve(best_estimator, "decisionTree",dataset.xtrain,dataset.ytrain, "dt__min_samples_leaf", np.arange(1, 50, 1), "accuracy",None, "Accuracy", "Decision Tree", dataset.name, "MinSamplesLeaf")
+    #plotValidationCurve(best_estimator, "decisionTree",dataset.xtrain,dataset.ytrain, "dt__criterion", ['gini', 'entropy'], "accuracy",None, "Accuracy", "Decision Tree", dataset.name, "Criterion")
+    path = best_estimator["dt"].cost_complexity_pruning_path(dataset.xtrain, dataset.ytrain)
+    ccp_alphas, impurities = path.ccp_alphas, path.impurities
+    best_estimator.set_params()
+    #plotValidationCurve(best_estimator, "decisionTree",dataset.xtrain,dataset.ytrain, "dt__ccp_alpha", ccp_alphas, "accuracy",None, "Accuracy", "Decision Tree", dataset.name, "CCPAlpha")
+    #print("Best Params")
+    #print(best_params)
+    path = "{}/{}/params.txt".format("Decision Tree",dataset.name,)
 
-        train_sizes=train_sizes)
-
-    train_scores_mean = np.mean(train_scores, axis=1)
-    train_scores_std = np.std(train_scores, axis=1)
-    test_scores_mean = np.mean(test_scores, axis=1)
-    test_scores_std = np.std(test_scores, axis=1)
-    train_points = train_scores_mean
-    test_points = test_scores_mean
-    plt.clf()
-    plt.fill_between(train_sizes, train_scores_mean - train_scores_std,
-                     train_scores_mean + train_scores_std, alpha=0.2)
-    plt.fill_between(train_sizes, test_scores_mean - test_scores_std,
-                     test_scores_mean + test_scores_std, alpha=0.2)
-
-    plt.plot(train_sizes, train_points, 'o-', linewidth=1, markersize=4,
-             label="Training score")
-    plt.plot(train_sizes, test_points, 'o-', linewidth=1, markersize=4,
-             label="Cross-validation score")
-
-    plt.legend(loc="best")
-    plt.savefig("decisionTree/{}learningCurve.png".format(name))
-
+    #with open(path, "w") as f:
+    #    f.write(str(best_params))
+    plotConfusionMatrix(best_estimator, dataset.xtest, dataset.ytest, dataset.classes, "Decision Trees", dataset.name)
 
 def main():
     warnings.simplefilter("ignore", sklearn.exceptions.DataConversionWarning)
-    warnings.simplefilter("ignore", DeprecationWarning)
-    # dataset = PenDigitsDataset()
+    
+    Pendataset = PenDigitsDataset()
     dataset = SpamBaseDataset()
     dt = DecisionTree()
+    default = DefaultDataset()
     pipe = Pipeline([("scaler", StandardScaler()),
                     ('dt', dt.dt)])
 
-    criterions = ["gini", "entropy"]
-    # $complexity(pipe, dataset)
+    #complexity(pipe, dataset)
     #criteria(pipe, dataset)
-    #paramters(pipe, dataset)
-    leavesComplexity(pipe, dataset)
+   
+    
+    #learningCurve(pipe, default)
+    learningCurve(pipe, dataset)
+    #leavesComplexity(pipe, dataset)
+
+    #complexity(pipe, Pendataset)
+    #criteria(pipe, Pendataset)
+    learningCurve(pipe, Pendataset)
+    #leavesComplexity(pipe, Pendataset)
 
 
 if __name__ == "__main__":
